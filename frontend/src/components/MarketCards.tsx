@@ -6,30 +6,39 @@ interface Props {
 
 export default function MarketCards({ performances }: Props) {
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {performances.map((p) => {
         const isUp = p.daily_change >= 0;
         return (
           <div
             key={p.symbol}
-            className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 flex flex-col gap-1"
+            className="rounded-2xl bg-surface border border-border p-4 flex flex-col gap-2 hover:border-accent/30 transition-colors"
           >
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {p.symbol}
-            </span>
-            <span className="text-xl font-semibold font-mono">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-foreground">
+                {p.symbol}
+              </span>
+              <span
+                className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                  isUp
+                    ? "bg-accent-dim text-accent"
+                    : "bg-negative-dim text-negative"
+                }`}
+              >
+                {isUp ? "+" : ""}
+                {p.daily_change_pct.toFixed(2)}%
+              </span>
+            </div>
+            <span className="text-2xl font-bold font-mono text-foreground">
               ${p.current_price.toFixed(2)}
             </span>
             <span
               className={`text-sm font-mono ${
-                isUp
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-red-600 dark:text-red-400"
+                isUp ? "text-accent" : "text-negative"
               }`}
             >
               {isUp ? "+" : ""}
-              {p.daily_change.toFixed(2)} ({isUp ? "+" : ""}
-              {p.daily_change_pct.toFixed(2)}%)
+              {p.daily_change.toFixed(2)} today
             </span>
           </div>
         );

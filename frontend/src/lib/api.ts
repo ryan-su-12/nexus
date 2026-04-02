@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 export interface Holding {
   id: string;
@@ -54,4 +54,27 @@ export function getMarketData(userId: string) {
 
 export function getDailySummary(userId: string) {
   return apiFetch<DailySummary>(`/users/${userId}/summary`);
+}
+
+export function getBrokerageConnectUrl(userId: string) {
+  return apiFetch<{ connect_url: string }>(`/users/${userId}/brokerage/connect`, {
+    method: "POST",
+  });
+}
+
+export function getBrokerageAccounts(userId: string) {
+  return apiFetch<{ accounts: BrokerageAccount[] }>(`/users/${userId}/brokerage/accounts`);
+}
+
+export function syncBrokerageHoldings(userId: string) {
+  return apiFetch<{ holdings_count: number; holdings: Holding[] }>(
+    `/users/${userId}/brokerage/holdings`
+  );
+}
+
+export interface BrokerageAccount {
+  id: string;
+  name: string;
+  number: string;
+  institution_name: string;
 }
