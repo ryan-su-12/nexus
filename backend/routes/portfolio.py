@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from database import supabase
 
 router = APIRouter()
@@ -6,10 +6,10 @@ router = APIRouter()
 @router.post("/users/{user_id}/holdings/seed")
 async def seed_holdings(user_id: str):
     """Temporary endpoint — seeds your real holdings for testing."""
-    # Verify user exists
-    user = supabase.table("users").select("*").eq("id", user_id).execute()
-    if not user.data:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Ensure user exists in users table
+    existing = supabase.table("users").select("id").eq("id", user_id).execute()
+    if not existing.data:
+        supabase.table("users").insert({"id": user_id, "email": ""}).execute()
 
     # Clear old holdings
     supabase.table("holdings").delete().eq("user_id", user_id).execute()
