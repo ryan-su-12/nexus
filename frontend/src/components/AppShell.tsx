@@ -11,7 +11,7 @@ const navItems = [
   { href: "/connect", label: "Connect", icon: "⟡" },
 ];
 
-const publicPaths = ["/login", "/signup"];
+const publicPaths = ["/login", "/signup", "/home"];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

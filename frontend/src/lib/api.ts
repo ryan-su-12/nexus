@@ -58,6 +58,18 @@ export function getDailySummary(userId: string) {
   return apiFetch<DailySummary>(`/users/${userId}/summary`);
 }
 
+export interface HistoryPoint {
+  date: string;
+  value: number;
+  change_pct: number;
+}
+
+export function getPortfolioHistory(userId: string, days = 30) {
+  return apiFetch<{ history: HistoryPoint[] }>(
+    `/users/${userId}/portfolio/history?days=${days}`
+  );
+}
+
 export function getBrokerageConnectUrl(userId: string) {
   return apiFetch<{ connect_url: string }>(`/users/${userId}/brokerage/connect`, {
     method: "POST",

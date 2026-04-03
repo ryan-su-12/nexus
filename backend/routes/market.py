@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import finnhub
 import requests
 from config import settings
@@ -45,6 +45,40 @@ async def get_market_data(user_id: str):
     return {"performances": performances, "news": news}
 
 
+@router.get("/users/{user_id}/portfolio/history")
+async def get_portfolio_history(user_id: str, days: int = 30):
+    """Return daily portfolio value for the last N days."""
+    result = supabase.table("holdings").select("symbol, quantity").eq("user_id", user_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=400, detail="No holdings found")
+
+    # Deduplicate: if same symbol in multiple accounts, sum quantities
+    quantities: dict[str, float] = {}
+    for h in result.data:
+        sym = h["symbol"]
+        quantities[sym] = quantities.get(sym, 0) + (h.get("quantity") or 0)
+
+    range_str = f"{days}d"
+    history: dict[str, dict] = {}  # date -> {value, prev_value}
+
+    for symbol, qty in quantities.items():
+        prices = _fetch_yahoo_history(symbol, range_str)
+        for date, price in prices.items():
+            if date not in history:
+                history[date] = {"value": 0.0}
+            history[date]["value"] += price * qty
+
+    sorted_days = sorted(history.items())
+    data_points = []
+    for i, (date, d) in enumerate(sorted_days):
+        prev_value = sorted_days[i - 1][1]["value"] if i > 0 else d["value"]
+        value = round(d["value"], 2)
+        change_pct = round(((value - prev_value) / prev_value) * 100, 2) if prev_value else 0
+        data_points.append({"date": date, "value": value, "change_pct": change_pct})
+
+    return {"history": data_points}
+
+
 def _fetch_finnhub_quote(client, symbol: str) -> dict | None:
     try:
         quote = client.quote(symbol)
@@ -83,6 +117,26 @@ def _fetch_yahoo_quote(symbol: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def _fetch_yahoo_history(symbol: str, range_str: str) -> dict[str, float]:
+    """Returns {date: closing_price} for the given range."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range_str}&interval=1d"
+        r = requests.get(url, headers=YAHOO_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return {}
+        result = r.json()["chart"]["result"][0]
+        timestamps = result.get("timestamp", [])
+        closes = result["indicators"]["quote"][0].get("close", [])
+        out = {}
+        for ts, close in zip(timestamps, closes):
+            if close is not None:
+                date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                out[date] = close
+        return out
+    except Exception:
+        return {}
 
 
 def _fetch_finnhub_news(client, symbol: str, from_date: str, to_date: str) -> list:
