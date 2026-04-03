@@ -7,6 +7,8 @@ export interface Holding {
   name: string;
   quantity: number;
   currency: string;
+  account_id: string | null;
+  account_name: string | null;
 }
 
 export interface Performance {

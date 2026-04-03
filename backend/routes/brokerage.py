@@ -95,6 +95,10 @@ async def get_brokerage_holdings(user_id: str):
 
         all_holdings = []
         for account in response.body:
+            account_info = account.get("account", {})
+            account_id = account_info.get("id", "")
+            account_name = account_info.get("name", "") or account_info.get("number", "Unknown Account")
+
             positions = account.get("positions", [])
             for pos in positions:
                 symbol_info = pos.get("symbol", {})
@@ -109,6 +113,8 @@ async def get_brokerage_holdings(user_id: str):
                         "name": description,
                         "quantity": float(units) if units else 0,
                         "currency": currency,
+                        "account_id": account_id,
+                        "account_name": account_name,
                     })
 
         # Sync to database — clear old holdings, insert new ones

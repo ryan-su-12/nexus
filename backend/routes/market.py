@@ -15,7 +15,7 @@ async def get_market_data(user_id: str):
     if not result.data:
         raise HTTPException(status_code=400, detail="No holdings found")
 
-    symbols = [h["symbol"] for h in result.data]
+    symbols = list(dict.fromkeys(h["symbol"] for h in result.data))
     finnhub_client = finnhub.Client(api_key=settings.finnhub_api_key)
 
     # Fetch prices — try Finnhub first, fall back to Yahoo for Canadian stocks
@@ -70,7 +70,7 @@ def _fetch_yahoo_quote(symbol: str) -> dict | None:
         meta = r.json()["chart"]["result"][0]["meta"]
         current = meta.get("regularMarketPrice")
         previous = meta.get("chartPreviousClose")
-        if current and previous:
+        if current and previous: 
             change = round(current - previous, 2)
             change_pct = round((change / previous) * 100, 2)
             return {
