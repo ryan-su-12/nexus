@@ -29,14 +29,12 @@ async def get_market_data(user_id: str):
 
     # Fetch news — Finnhub for US, Yahoo for any that Finnhub misses
     today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
     news = []
     seen = set()
     for symbol in symbols:
         articles = _fetch_finnhub_news(finnhub_client, symbol, yesterday, today)
-        if not articles:
-            articles = _fetch_yahoo_news(symbol)
         for a in articles:
             if a["headline"] not in seen:
                 seen.add(a["headline"])

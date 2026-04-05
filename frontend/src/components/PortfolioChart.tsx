@@ -45,6 +45,7 @@ export default function PortfolioChart({ history, range, onRangeChange }: Props)
   const isUp = totalChange >= 0;
   const color = isUp ? "#00d632" : "#ff5252";
 
+
   const data = history.map((h) => ({
     ...h,
     date: formatDate(h.date, range),

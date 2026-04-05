@@ -1,25 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { useAuth } from "@/lib/AuthContext";
-import { getMarketData, NewsItem } from "@/lib/api";
+import { getMarketData } from "@/lib/api";
 import NewsFeed from "@/components/NewsFeed";
 
 export default function NewsPage() {
   const { user } = useAuth();
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    setError(null);
-    getMarketData(user.id)
-      .then((m) => setNews(m.news))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [user]);
+  const { data: market, error } = useSWR(
+    user ? `market-${user.id}` : null,
+    () => getMarketData(user!.id)
+  );
+
+  const loading = !market && !error;
 
   if (loading) {
     return (
@@ -30,8 +24,10 @@ export default function NewsPage() {
   }
 
   if (error) {
-    return <p className="text-negative text-sm py-12 text-center">{error}</p>;
+    return <p className="text-negative text-sm py-12 text-center">{error.message}</p>;
   }
+
+  const news = market?.news ?? [];
 
   return (
     <div className="space-y-4">

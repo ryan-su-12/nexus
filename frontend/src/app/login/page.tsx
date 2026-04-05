@@ -25,6 +25,12 @@ export default function LoginPage() {
     if (error) {
       setError(error.message);
       setLoading(false);
+      return;
+    }
+
+    const { data: aal } = await getSupabase().auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.nextLevel === "aal2" && aal.nextLevel !== aal.currentLevel) {
+      router.push("/verify-mfa");
     } else {
       router.push("/");
     }
@@ -84,14 +90,17 @@ export default function LoginPage() {
           >
             {loading ? "Signing in..." : "Sign in"}
           </button>
+
+          <div className="text-center">
+            <Link href="/forgot-password" className="text-sm text-muted hover:text-foreground transition-colors">
+              Forgot your password?
+            </Link>
+          </div>
         </form>
 
         <p className="text-center text-sm text-muted">
           Don&apos;t have an account?{" "}
-          <Link
-            href="/signup"
-            className="font-medium text-accent hover:underline"
-          >
+          <Link href="/signup" className="font-medium text-accent hover:underline">
             Sign up
           </Link>
         </p>

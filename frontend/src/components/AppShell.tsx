@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 
@@ -11,12 +12,20 @@ const navItems = [
   { href: "/connect", label: "Connect", icon: "⟡" },
 ];
 
-const publicPaths = ["/login", "/signup", "/home"];
+const publicPaths = ["/login", "/signup", "/home", "/forgot-password", "/reset-password", "/verify-mfa"];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading, signOut } = useAuth();
+
+  const isPublic = publicPaths.includes(pathname);
+
+  useEffect(() => {
+    if (!loading && !user && !isPublic) {
+      router.push("/home");
+    }
+  }, [loading, user, isPublic, router]);
 
   if (loading) {
     return (
@@ -26,12 +35,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (publicPaths.includes(pathname)) {
+  if (isPublic) {
     return <>{children}</>;
   }
 
   if (!user) {
-    router.push("/login");
     return null;
   }
 
@@ -61,11 +69,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="px-3 py-4 border-t border-border">
+        <div className="px-3 py-4 border-t border-border space-y-1">
+          <Link
+            href="/security"
+            className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              pathname === "/security"
+                ? "bg-accent-dim text-accent"
+                : "text-muted hover:text-foreground hover:bg-surface-light"
+            }`}
+          >
+            Security
+          </Link>
           <button
             onClick={async () => {
               await signOut();
-              router.push("/login");
+              router.push("/home");
             }}
             className="w-full text-left rounded-lg px-3 py-2 text-sm text-muted hover:text-foreground hover:bg-surface-light transition-colors"
           >
