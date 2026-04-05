@@ -1,61 +1,50 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import useSWR from "swr";
 import { useAuth } from "@/lib/AuthContext";
-import { getMarketData, getDailySummary, getPortfolioHistory, MarketData, HistoryPoint } from "@/lib/api";
-import MarketCards from "@/components/MarketCards";
+import { getMarketData, getDailySummary, getPortfolioHistory } from "@/lib/api";
 import SummaryPanel from "@/components/SummaryPanel";
 import PortfolioChart from "@/components/PortfolioChart";
 
 export default function OverviewPage() {
   const { user } = useAuth();
-  const [market, setMarket] = useState<MarketData | null>(null);
-  const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [range, setRange] = useState(30);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!user) return;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      getMarketData(user.id),
-      getPortfolioHistory(user.id, range),
-    ])
-      .then(([m, h]) => {
-        setMarket(m);
-        setHistory(h.history);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [user]);
+  const { data: market, error: marketError } = useSWR(
+    user ? `market-${user.id}` : null,
+    () => getMarketData(user!.id)
+  );
+
+  const { data: historyData } = useSWR(
+    user ? `history-${user.id}-${range}` : null,
+    () => getPortfolioHistory(user!.id, range)
+  );
+
+  const { data: summaryData, mutate: mutateSummary } = useSWR(
+    user ? `summary-${user.id}` : null,
+    null,
+    { revalidateOnFocus: false, revalidateOnReconnect: false }
+  );
+
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   const handleRangeChange = useCallback(async (days: number) => {
-    if (!user) return;
     setRange(days);
-    try {
-      const h = await getPortfolioHistory(user.id, days);
-      setHistory(h.history);
-    } catch {
-      // keep existing data on error
-    }
-  }, [user]);
+  }, []);
 
   const handleGenerateSummary = useCallback(async () => {
     if (!user) return;
     setSummaryLoading(true);
     try {
       const res = await getDailySummary(user.id);
-      setSummary(res.summary);
-    } catch (err) {
-      setSummary(`Error: ${err instanceof Error ? err.message : "Failed to generate summary"}`);
+      mutateSummary(res.summary, { revalidate: false });
     } finally {
       setSummaryLoading(false);
     }
-  }, [user]);
+  }, [user, mutateSummary]);
+
+  const loading = !market && !marketError;
 
   if (loading) {
     return (
@@ -65,22 +54,21 @@ export default function OverviewPage() {
     );
   }
 
-  if (error) {
+  if (marketError) {
     return (
       <div className="text-center space-y-3 py-12">
-        <p className="text-negative text-sm">{error}</p>
+        <p className="text-negative text-sm">{marketError.message}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {history.length > 0 && (
-        <PortfolioChart history={history} range={range} onRangeChange={handleRangeChange} />
+      {historyData && historyData.history.length > 0 && (
+        <PortfolioChart history={historyData.history} range={range} onRangeChange={handleRangeChange} />
       )}
-      {market && <MarketCards performances={market.performances} />}
       <SummaryPanel
-        summary={summary}
+        summary={summaryData ?? null}
         loading={summaryLoading}
         onGenerate={handleGenerateSummary}
       />
