@@ -7,7 +7,8 @@ import { useAuth } from "@/lib/AuthContext";
 
 const navItems = [
   { href: "/", label: "Overview", icon: "◎" },
-  { href: "/holdings", label: "Holdings", icon: "◫" },
+  { href: "/holdings", label: "Portfolio", icon: "◫" },
+  { href: "/analytics", label: "Analytics", icon: "◈" },
   { href: "/news", label: "News", icon: "◧" },
   { href: "/connect", label: "Connect", icon: "⟡" },
 ];
@@ -92,7 +93,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto p-6 bg-background">
-        <div className="max-w-5xl mx-auto">{children}</div>
+        <div className="max-w-7xl mx-auto">{children}</div>
       </main>
     </div>
   );
