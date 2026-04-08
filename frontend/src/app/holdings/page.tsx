@@ -1,8 +1,14 @@
 "use client";
 
 import useSWR from "swr";
+import { Treemap, ResponsiveContainer, Tooltip } from "recharts";
 import { useAuth } from "@/lib/AuthContext";
-import { getHoldings, getMarketData } from "@/lib/api";
+import {
+  getHoldings,
+  getMarketData,
+  type Holding,
+  type Performance,
+} from "@/lib/api";
 
 /* ──────────────────────────────────────────────────────────────
    Portfolio (Attribution Matrix) — new layout
@@ -24,7 +30,10 @@ export default function PortfolioPage() {
     () => getHoldings(user!.id)
   );
 
-  useSWR(user ? `market-${user.id}` : null, () => getMarketData(user!.id));
+  const { data: marketData } = useSWR(
+    user ? `market-${user.id}` : null,
+    () => getMarketData(user!.id)
+  );
 
   const loading = !holdingsData && !holdingsError;
 
@@ -58,13 +67,19 @@ export default function PortfolioPage() {
       {/* Top row: Treemap + Correlation Explorer */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2">
-          <HeatmapTreemapCard />
+          <HeatmapTreemapCard
+            holdings={holdingsData?.holdings ?? []}
+            performances={marketData?.performances ?? []}
+          />
         </div>
         <CorrelationExplorerCard />
       </div>
 
       {/* Attribution factors table */}
-      <AttributionFactorsCard />
+      <AttributionFactorsCard
+        holdings={holdingsData?.holdings ?? []}
+        performances={marketData?.performances ?? []}
+      />
     </div>
   );
 }
@@ -110,72 +125,180 @@ function CardHeader({
 }
 
 /* ── Heatmap Treemap ──
-   Placeholder treemap using CSS grid. Each tile sizes by weight,
-   color = daily % change (green pos / red neg).  */
-function HeatmapTreemapCard() {
-  type Tile = {
-    label: string;
-    pct: string;
-    col: number; // grid column span
-    row: number; // grid row span
-    tone: "pos-strong" | "pos" | "neg" | "neg-strong";
+   Dynamic Recharts treemap. Each tile's size = position weight
+   (market value as % of portfolio). Color = daily % change
+   (green positive / red negative, intensity scales with magnitude). */
+function HeatmapTreemapCard({
+  holdings,
+  performances,
+}: {
+  holdings: Holding[];
+  performances: Performance[];
+}) {
+  const perfMap = new Map(performances.map((p) => [p.symbol, p] as const));
+
+  // Aggregate across accounts (sum quantities per symbol)
+  const qtyBySymbol = new Map<string, number>();
+  for (const h of holdings) {
+    qtyBySymbol.set(h.symbol, (qtyBySymbol.get(h.symbol) ?? 0) + h.quantity);
+  }
+
+  type Node = {
+    name: string;
+    size: number;
+    changePct: number;
+    weightPct: number;
   };
 
-  const tiles: Tile[] = [
-    { label: "NVDA", pct: "18%", col: 4, row: 3, tone: "pos-strong" },
-    { label: "AAPL", pct: "12%", col: 3, row: 2, tone: "pos" },
-    { label: "AAPL", pct: "12%", col: 2, row: 2, tone: "pos" },
-    { label: "NVDA", pct: "18%", col: 2, row: 2, tone: "neg-strong" },
-    { label: "AAPL", pct: "6%", col: 2, row: 2, tone: "neg" },
-    { label: "TSLA", pct: "7%", col: 1, row: 2, tone: "neg" },
-    { label: "NVAA", pct: "3%", col: 2, row: 1, tone: "pos" },
-    { label: "TLA", pct: "2%", col: 1, row: 1, tone: "neg" },
-    { label: "AAPL", pct: "12%", col: 4, row: 2, tone: "pos" },
-    { label: "AAPL", pct: "6%", col: 2, row: 2, tone: "pos" },
-    { label: "TLA", pct: "2%", col: 1, row: 1, tone: "neg" },
-    { label: "TSLA", pct: "2%", col: 2, row: 1, tone: "neg-strong" },
-    { label: "TSLA", pct: "2%", col: 1, row: 1, tone: "neg" },
-  ];
+  const nodes: Node[] = [];
+  let total = 0;
+  for (const [symbol, qty] of qtyBySymbol) {
+    const perf = perfMap.get(symbol);
+    if (!perf) continue;
+    const value = qty * perf.current_price;
+    total += value;
+    nodes.push({ name: symbol, size: value, changePct: perf.daily_change_pct, weightPct: 0 });
+  }
+  for (const n of nodes) n.weightPct = total ? (n.size / total) * 100 : 0;
+  nodes.sort((a, b) => b.size - a.size);
 
-  const toneClass = (t: Tile["tone"]) =>
-    ({
-      "pos-strong": "bg-accent/70 text-black",
-      pos: "bg-accent/40 text-foreground",
-      neg: "bg-negative/50 text-foreground",
-      "neg-strong": "bg-negative/70 text-foreground",
-    }[t]);
+  const hasData = nodes.length > 0;
+
+  // Map daily % change → heat color (clamped at ±5%)
+  const colorFor = (pct: number) => {
+    const clamped = Math.max(-5, Math.min(5, pct));
+    const intensity = Math.abs(clamped) / 5;
+    const alpha = 0.25 + intensity * 0.65;
+    return pct >= 0
+      ? `rgba(0, 214, 50, ${alpha})`
+      : `rgba(255, 82, 82, ${alpha})`;
+  };
 
   return (
     <Card>
       <CardHeader
         title="Heatmap Treemap"
-        subtitle="Size corresponds to position weight. Color % daily % change."
+        subtitle="Size corresponds to position weight. Color = daily % change."
       />
-      <div
-        className="grid gap-1 h-[460px]"
-        style={{
-          gridTemplateColumns: "repeat(8, 1fr)",
-          gridAutoRows: "1fr",
-          gridAutoFlow: "dense",
-        }}
-      >
-        {tiles.map((t, i) => (
-          <div
-            key={i}
-            className={`rounded-md flex flex-col items-center justify-center ${toneClass(
-              t.tone
-            )}`}
-            style={{
-              gridColumn: `span ${t.col}`,
-              gridRow: `span ${t.row}`,
-            }}
-          >
-            <span className="text-xs font-semibold">[{t.label}]</span>
-            <span className="text-[11px] font-mono opacity-90">{t.pct}</span>
-          </div>
-        ))}
-      </div>
+      {!hasData ? (
+        <div className="h-[460px] flex items-center justify-center text-sm text-muted">
+          No holdings data yet
+        </div>
+      ) : (
+        <div className="h-[460px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <Treemap
+              data={nodes}
+              dataKey="size"
+              nameKey="name"
+              stroke="#0a0a0a"
+              isAnimationActive={false}
+              content={<TreemapTile colorFor={colorFor} />}
+            >
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#141414",
+                  border: "1px solid #242424",
+                  borderRadius: "12px",
+                  fontSize: 12,
+                }}
+                formatter={((_v: unknown, _n: unknown, entry: { payload?: Partial<Node> & { root?: Node } }) => {
+                  // In Treemap, the leaf data is under payload.root
+                  const n = entry.payload?.root ?? entry.payload;
+                  if (!n || typeof n.changePct !== "number") return ["", ""];
+                  return [
+                    `${(n.weightPct ?? 0).toFixed(1)}% weight · ${
+                      n.changePct >= 0 ? "+" : ""
+                    }${n.changePct.toFixed(2)}%`,
+                    n.name ?? "",
+                  ];
+                }) as never}
+                labelStyle={{ display: "none" }}
+              />
+            </Treemap>
+          </ResponsiveContainer>
+        </div>
+      )}
     </Card>
+  );
+}
+
+/* Custom tile renderer for the treemap.
+   Recharts Treemap spreads the node's data fields as top-level
+   props (changePct, weightPct), not under `payload`. */
+function TreemapTile(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+  changePct?: number;
+  weightPct?: number;
+  depth?: number;
+  colorFor?: (pct: number) => string;
+}) {
+  const {
+    x = 0,
+    y = 0,
+    width = 0,
+    height = 0,
+    name = "",
+    changePct,
+    weightPct,
+    depth = 0,
+    colorFor,
+  } = props;
+
+  // Recharts renders a root tile at depth 0 that covers the whole
+  // chart — skip drawing it so tiles don't stack on top of each other.
+  if (depth === 0) return null;
+
+  const hasPct = typeof changePct === "number";
+  const fill = hasPct && colorFor ? colorFor(changePct!) : "rgba(82,82,82,0.5)";
+  // Inset each tile slightly so they look separated rather than
+  // filling the whole bounding box uniformly.
+  const pad = 3;
+  const rx = 6;
+  const showLabel = width > 54 && height > 32;
+  const showPct = width > 70 && height > 52;
+
+  return (
+    <g>
+      <rect
+        x={x + pad}
+        y={y + pad}
+        width={Math.max(0, width - pad * 2)}
+        height={Math.max(0, height - pad * 2)}
+        fill={fill}
+        stroke="#0a0a0a"
+        strokeWidth={1}
+        rx={rx}
+      />
+      {showLabel && (
+        <text
+          x={x + width / 2}
+          y={y + height / 2 - (showPct ? 6 : 0)}
+          textAnchor="middle"
+          fill="#ffffff"
+          fontSize={Math.min(15, Math.max(10, Math.sqrt(width * height) / 9))}
+          fontWeight={600}
+        >
+          [{name}]
+        </text>
+      )}
+      {showPct && typeof weightPct === "number" && (
+        <text
+          x={x + width / 2}
+          y={y + height / 2 + 12}
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.9)"
+          fontSize={11}
+          fontFamily="ui-monospace, monospace"
+        >
+          {weightPct.toFixed(0)}%
+        </text>
+      )}
+    </g>
   );
 }
 
@@ -246,44 +369,101 @@ function MiniLineChart({ tone }: { tone: "accent" | "negative" }) {
 }
 
 /* ── Attribution Factors table ── */
-function AttributionFactorsCard() {
-  const rows = [
-    { t: "NVDA", w1: "12%", w2: "0.2%", mom: "-0.22%", chg: "0.99%", imp: "0.99%" },
-    { t: "AAPL", w1: "12%", w2: "0.2%", mom: "-0.22%", chg: "0.96%", imp: "0.96%" },
-    { t: "NVLA", w1: "3.2%", w2: "0.2%", mom: "-0.22%", chg: "0.99%", imp: "0.99%" },
-    { t: "NVOA", w1: "2.5%", w2: "0.7%", mom: "-0.22%", chg: "0.99%", imp: "0.56%" },
-    { t: "TLA", w1: "2.3%", w2: "0.2%", mom: "-0.22%", chg: "0.99%", imp: "0.50%" },
-    { t: "TSLA", w1: "2.9%", w2: "0.2%", mom: "-0.22%", chg: "0.05%", imp: "0.50%" },
-  ];
+function AttributionFactorsCard({
+  holdings,
+  performances,
+}: {
+  holdings: Holding[];
+  performances: Performance[];
+}) {
+  const perfMap = new Map(performances.map((p) => [p.symbol, p] as const));
+
+  // Aggregate across accounts
+  const qtyBySymbol = new Map<string, number>();
+  for (const h of holdings) {
+    qtyBySymbol.set(h.symbol, (qtyBySymbol.get(h.symbol) ?? 0) + h.quantity);
+  }
+
+  type Row = {
+    t: string;
+    weight: number; // portfolio weight %
+    value: number; // market value $
+    chgPct: number; // daily %
+    impact: number; // daily $ contribution
+  };
+
+  const raw: Row[] = [];
+  let total = 0;
+  for (const [symbol, qty] of qtyBySymbol) {
+    const perf = perfMap.get(symbol);
+    if (!perf) continue;
+    const value = qty * perf.current_price;
+    const impact = qty * perf.daily_change;
+    total += value;
+    raw.push({
+      t: symbol,
+      weight: 0,
+      value,
+      chgPct: perf.daily_change_pct,
+      impact,
+    });
+  }
+  for (const r of raw) r.weight = total ? (r.value / total) * 100 : 0;
+  raw.sort((a, b) => b.weight - a.weight);
+
+  const fmtMoney = (v: number) => {
+    const sign = v >= 0 ? "" : "-";
+    const abs = Math.abs(v);
+    if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
+    return `${sign}$${abs.toFixed(0)}`;
+  };
+  const fmtPct = (v: number) =>
+    `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
   return (
     <Card>
       <CardHeader
         title="Attribution Factors (e.g., Value, Growth, Momentum)"
         subtitle="Size corresponds to position weight. Color % daily % change."
       />
-      <div className="grid grid-cols-6 text-[11px] text-muted pb-2 border-b border-border">
+      <div className="grid grid-cols-5 text-[11px] text-muted pb-2 border-b border-border">
         <span>Ticker</span>
         <span className="text-right">Weight</span>
-        <span className="text-right">Weight</span>
-        <span className="text-right">Momentum</span>
+        <span className="text-right">Value</span>
         <span className="text-right">Change</span>
         <span className="text-right">Impact</span>
       </div>
-      <div className="divide-y divide-border">
-        {rows.map((r, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-6 py-2.5 text-xs font-mono items-center"
-          >
-            <span className="text-foreground">[{r.t}]</span>
-            <span className="text-right text-foreground">{r.w1}</span>
-            <span className="text-right text-negative">{r.w2}</span>
-            <span className="text-right text-negative">{r.mom}</span>
-            <span className="text-right text-accent">{r.chg}</span>
-            <span className="text-right text-accent">{r.imp}</span>
-          </div>
-        ))}
-      </div>
+      {raw.length === 0 ? (
+        <p className="text-xs text-muted py-6 text-center">
+          No holdings data yet
+        </p>
+      ) : (
+        <div className="divide-y divide-border">
+          {raw.map((r, i) => {
+            const up = r.chgPct >= 0;
+            const color = up ? "text-accent" : "text-negative";
+            return (
+              <div
+                key={i}
+                className="grid grid-cols-5 py-2.5 text-xs font-mono items-center"
+              >
+                <span className="text-foreground">[{r.t}]</span>
+                <span className="text-right text-foreground">
+                  {r.weight.toFixed(1)}%
+                </span>
+                <span className="text-right text-muted">
+                  {fmtMoney(r.value)}
+                </span>
+                <span className={`text-right ${color}`}>
+                  {fmtPct(r.chgPct)}
+                </span>
+                <span className={`text-right ${color}`}>
+                  {fmtMoney(r.impact)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }

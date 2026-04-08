@@ -70,6 +70,12 @@ export function getPortfolioHistory(userId: string, days = 30) {
   );
 }
 
+export function getBenchmarkHistory(days = 30, symbol = "^GSPC") {
+  return apiFetch<{ symbol: string; history: HistoryPoint[] }>(
+    `/benchmark/history?days=${days}&symbol=${encodeURIComponent(symbol)}`
+  );
+}
+
 export function getBrokerageConnectUrl(userId: string) {
   return apiFetch<{ connect_url: string }>(`/users/${userId}/brokerage/connect`, {
     method: "POST",
