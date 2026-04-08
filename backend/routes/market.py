@@ -77,6 +77,28 @@ async def get_portfolio_history(user_id: str, days: int = 30):
     return {"history": data_points}
 
 
+@router.get("/benchmark/history")
+async def get_benchmark_history(days: int = 30, symbol: str = "^GSPC"):
+    """Return daily closing values for a benchmark index (default S&P 500)."""
+    range_str = f"{days}d"
+    prices = _fetch_yahoo_history(symbol, range_str)
+    if not prices:
+        return {"symbol": symbol, "history": []}
+
+    sorted_days = sorted(prices.items())
+    data_points = []
+    for i, (date, price) in enumerate(sorted_days):
+        prev_price = sorted_days[i - 1][1] if i > 0 else price
+        change_pct = (
+            round(((price - prev_price) / prev_price) * 100, 2) if prev_price else 0
+        )
+        data_points.append(
+            {"date": date, "value": round(price, 2), "change_pct": change_pct}
+        )
+
+    return {"symbol": symbol, "history": data_points}
+
+
 def _fetch_finnhub_quote(client, symbol: str) -> dict | None:
     try:
         quote = client.quote(symbol)
