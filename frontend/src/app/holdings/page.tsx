@@ -1,7 +1,6 @@
 "use client";
 
 import useSWR from "swr";
-import { Treemap, ResponsiveContainer, Tooltip } from "recharts";
 import { useAuth } from "@/lib/AuthContext";
 import {
   getHoldings,
@@ -57,26 +56,15 @@ export default function PortfolioPage() {
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">ATTRIBUTION MATRIX</h1>
+        <h1 className="text-2xl font-bold tracking-tight">DIVERSIFICATION INDEX</h1>
         <button className="flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 text-xs text-foreground hover:border-accent/40 transition-colors">
           Deep Dive analysis
           <span className="text-muted">▾</span>
         </button>
       </div>
 
-      {/* Top row: Treemap + Correlation Explorer */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2">
-          <HeatmapTreemapCard
-            holdings={holdingsData?.holdings ?? []}
-            performances={marketData?.performances ?? []}
-          />
-        </div>
-        <CorrelationExplorerCard />
-      </div>
-
-      {/* Attribution factors table */}
-      <AttributionFactorsCard
+      {/* Sector heatmap treemap */}
+      <HeatmapTreemapCard
         holdings={holdingsData?.holdings ?? []}
         performances={marketData?.performances ?? []}
       />
@@ -125,9 +113,13 @@ function CardHeader({
 }
 
 /* ── Heatmap Treemap ──
-   Dynamic Recharts treemap. Each tile's size = position weight
-   (market value as % of portfolio). Color = daily % change
-   (green positive / red negative, intensity scales with magnitude). */
+   Sector-grouped treemap. Holdings are bucketed into the 11 GICS
+   sectors. Tile size = market-value weight, color = daily %
+   change (green pos / red neg, alpha scales with magnitude).
+
+   Index funds / ETFs: classified via SECTOR_OVERRIDES. Broad-market
+   funds (VFV, VOO, SPY...) land in a "Diversified" bucket. Sector
+   ETFs (ZEB → Financials) map to their dominant sector. */
 function HeatmapTreemapCard({
   holdings,
   performances,
@@ -143,26 +135,86 @@ function HeatmapTreemapCard({
     qtyBySymbol.set(h.symbol, (qtyBySymbol.get(h.symbol) ?? 0) + h.quantity);
   }
 
-  type Node = {
-    name: string;
-    size: number;
+  type Position = {
+    symbol: string;
+    value: number;
     changePct: number;
-    weightPct: number;
+    sector: string;
   };
 
-  const nodes: Node[] = [];
+  const positions: Position[] = [];
   let total = 0;
   for (const [symbol, qty] of qtyBySymbol) {
     const perf = perfMap.get(symbol);
     if (!perf) continue;
     const value = qty * perf.current_price;
     total += value;
-    nodes.push({ name: symbol, size: value, changePct: perf.daily_change_pct, weightPct: 0 });
+    positions.push({
+      symbol,
+      value,
+      changePct: perf.daily_change_pct,
+      sector: sectorFor(symbol),
+    });
   }
-  for (const n of nodes) n.weightPct = total ? (n.size / total) * 100 : 0;
-  nodes.sort((a, b) => b.size - a.size);
 
-  const hasData = nodes.length > 0;
+  // Group into sector buckets
+  type Bucket = {
+    name: string; // sector name
+    size: number; // total market value
+    weightPct: number;
+    weightedChangePct: number; // value-weighted daily %
+    positions: Position[];
+  };
+
+  const bucketMap = new Map<string, Bucket>();
+  for (const p of positions) {
+    const b = bucketMap.get(p.sector) ?? {
+      name: p.sector,
+      size: 0,
+      weightPct: 0,
+      weightedChangePct: 0,
+      positions: [],
+    };
+    b.size += p.value;
+    b.weightedChangePct += p.value * p.changePct; // accumulate numerator
+    b.positions.push(p);
+    bucketMap.set(p.sector, b);
+  }
+
+  const buckets = Array.from(bucketMap.values()).map((b) => ({
+    ...b,
+    weightPct: total ? (b.size / total) * 100 : 0,
+    weightedChangePct: b.size ? b.weightedChangePct / b.size : 0,
+    positions: b.positions.sort((a, b) => b.value - a.value),
+  }));
+  buckets.sort((a, b) => b.size - a.size);
+
+  const hasData = buckets.length > 0;
+
+  // Diversification index: Herfindahl-based. Score = 100 means
+  // perfectly even distribution across the 11 sectors; score → 0
+  // as the portfolio concentrates in one sector.
+  const N = 11;
+  const hhi = buckets.reduce(
+    (s, b) => s + Math.pow(b.weightPct / 100, 2),
+    0
+  );
+  const minHHI = 1 / N;
+  const diversification = hasData
+    ? Math.max(0, Math.min(100, Math.round(((1 - hhi) / (1 - minHHI)) * 100)))
+    : 0;
+  const divLabel =
+    diversification >= 80
+      ? "HIGH"
+      : diversification >= 50
+      ? "MODERATE"
+      : "LOW";
+  const divColor =
+    diversification >= 80
+      ? "#22c55e"
+      : diversification >= 50
+      ? "#eab308"
+      : "#ef4444";
 
   // Map daily % change → heat color (clamped at ±5%)
   const colorFor = (pct: number) => {
@@ -174,296 +226,252 @@ function HeatmapTreemapCard({
       : `rgba(255, 82, 82, ${alpha})`;
   };
 
+  // Show all 11 GICS sectors, even empty ones, so the user sees
+  // full coverage of the market.
+  type SectorTile = {
+    name: string;
+    weightPct: number;
+    changePct: number;
+    positions: Position[];
+  };
+
+  const CORE_SECTORS = GICS_SECTORS.filter(
+    (s) => s !== "Other" && s !== "Diversified"
+  );
+  const tiles: SectorTile[] = CORE_SECTORS.map((name) => {
+    const b = bucketMap.get(name);
+    return {
+      name,
+      weightPct: b && total ? (b.size / total) * 100 : 0,
+      changePct: b && b.size ? b.weightedChangePct : 0,
+      positions: b ? b.positions.sort((x, y) => y.value - x.value) : [],
+    };
+  });
+
   return (
     <Card>
-      <CardHeader
-        title="Heatmap Treemap"
-        subtitle="Size corresponds to position weight. Color = daily % change."
-      />
-      {!hasData ? (
-        <div className="h-[460px] flex items-center justify-center text-sm text-muted">
-          No holdings data yet
-        </div>
-      ) : (
-        <div className="h-[460px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <Treemap
-              data={nodes}
-              dataKey="size"
-              nameKey="name"
-              stroke="#0a0a0a"
-              isAnimationActive={false}
-              content={<TreemapTile colorFor={colorFor} />}
+      {/* Header: title + diversification gauge */}
+      <div className="flex items-start justify-between mb-5">
+        <CardHeader
+          title="Sector Heatmap Treemap"
+          subtitle="Size = weight · Color = daily % change · Grouped by sector"
+        />
+        {hasData && (
+          <div className="flex flex-col items-center">
+            <DiversificationGauge
+              value={diversification}
+              color={divColor}
+            />
+            <p
+              className="text-[10px] font-semibold tracking-widest mt-1"
+              style={{ color: divColor }}
             >
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#141414",
-                  border: "1px solid #242424",
-                  borderRadius: "12px",
-                  fontSize: 12,
-                }}
-                formatter={((_v: unknown, _n: unknown, entry: { payload?: Partial<Node> & { root?: Node } }) => {
-                  // In Treemap, the leaf data is under payload.root
-                  const n = entry.payload?.root ?? entry.payload;
-                  if (!n || typeof n.changePct !== "number") return ["", ""];
-                  return [
-                    `${(n.weightPct ?? 0).toFixed(1)}% weight · ${
-                      n.changePct >= 0 ? "+" : ""
-                    }${n.changePct.toFixed(2)}%`,
-                    n.name ?? "",
-                  ];
-                }) as never}
-                labelStyle={{ display: "none" }}
-              />
-            </Treemap>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/* Custom tile renderer for the treemap.
-   Recharts Treemap spreads the node's data fields as top-level
-   props (changePct, weightPct), not under `payload`. */
-function TreemapTile(props: {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  name?: string;
-  changePct?: number;
-  weightPct?: number;
-  depth?: number;
-  colorFor?: (pct: number) => string;
-}) {
-  const {
-    x = 0,
-    y = 0,
-    width = 0,
-    height = 0,
-    name = "",
-    changePct,
-    weightPct,
-    depth = 0,
-    colorFor,
-  } = props;
-
-  // Recharts renders a root tile at depth 0 that covers the whole
-  // chart — skip drawing it so tiles don't stack on top of each other.
-  if (depth === 0) return null;
-
-  const hasPct = typeof changePct === "number";
-  const fill = hasPct && colorFor ? colorFor(changePct!) : "rgba(82,82,82,0.5)";
-  // Inset each tile slightly so they look separated rather than
-  // filling the whole bounding box uniformly.
-  const pad = 3;
-  const rx = 6;
-  const showLabel = width > 54 && height > 32;
-  const showPct = width > 70 && height > 52;
-
-  return (
-    <g>
-      <rect
-        x={x + pad}
-        y={y + pad}
-        width={Math.max(0, width - pad * 2)}
-        height={Math.max(0, height - pad * 2)}
-        fill={fill}
-        stroke="#0a0a0a"
-        strokeWidth={1}
-        rx={rx}
-      />
-      {showLabel && (
-        <text
-          x={x + width / 2}
-          y={y + height / 2 - (showPct ? 6 : 0)}
-          textAnchor="middle"
-          fill="#ffffff"
-          fontSize={Math.min(15, Math.max(10, Math.sqrt(width * height) / 9))}
-          fontWeight={600}
-        >
-          [{name}]
-        </text>
-      )}
-      {showPct && typeof weightPct === "number" && (
-        <text
-          x={x + width / 2}
-          y={y + height / 2 + 12}
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.9)"
-          fontSize={11}
-          fontFamily="ui-monospace, monospace"
-        >
-          {weightPct.toFixed(0)}%
-        </text>
-      )}
-    </g>
-  );
-}
-
-/* ── Correlation Explorer ── */
-function CorrelationExplorerCard() {
-  const rows = [
-    { label: "Custom Timeline", value: "0.09" },
-    { label: "NEXUS PORTFOLIO", value: "0.59" },
-    { label: "NEXUS PORTFOLIO", value: "0.99" },
-    { label: "S&P 500 BENCHMARK", value: "0.89" },
-    { label: "S&P 500 BENCHMARK", value: "0.65" },
-    { label: "NYFAFIIANNAX", value: "0.09" },
-  ];
-  return (
-    <Card>
-      <CardHeader
-        title="Correlation Explorer"
-        subtitle="Correlation coefficient + custom timeline"
-      />
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-semibold">NEXUS PORTFOLIO</p>
-        <p className="text-xs font-mono text-foreground">0.89</p>
-      </div>
-      <MiniLineChart tone="accent" />
-
-      <div className="flex items-center justify-between mt-4 mb-2">
-        <p className="text-xs font-semibold text-muted">~ S&P 500 BENCHMARK</p>
-      </div>
-      <MiniLineChart tone="negative" />
-
-      <div className="mt-4 divide-y divide-border">
-        {rows.map((r, i) => (
-          <div
-            key={i}
-            className="flex items-center justify-between py-2 text-xs"
-          >
-            <span className="text-muted">{r.label}</span>
-            <span className="font-mono text-foreground">{r.value}</span>
+              {divLabel}
+            </p>
           </div>
-        ))}
+        )}
       </div>
+
+      <div className="grid grid-cols-4 gap-2 auto-rows-[120px]">
+        {tiles.map((t) => {
+          const hasPos = t.positions.length > 0;
+          const fill = hasPos ? colorFor(t.changePct) : "rgba(82,82,82,0.18)";
+          const border = hasPos
+            ? "border-transparent"
+            : "border-dashed border-border";
+          const topHoldings = t.positions.slice(0, 2);
+          return (
+            <div
+              key={t.name}
+              className={`relative rounded-xl border ${border} p-3 flex flex-col justify-between overflow-hidden`}
+              style={{ backgroundColor: fill }}
+              title={`${t.name} · ${t.weightPct.toFixed(1)}% · ${
+                t.changePct >= 0 ? "+" : ""
+              }${t.changePct.toFixed(2)}%`}
+            >
+              <div>
+                <p className="text-[10px] font-semibold tracking-wider text-white/70 uppercase leading-tight">
+                  {t.name}
+                </p>
+                {hasPos && (
+                  <p
+                    className={`text-[11px] font-mono mt-1 ${
+                      t.changePct >= 0 ? "text-white" : "text-white"
+                    }`}
+                  >
+                    {t.changePct >= 0 ? "+" : ""}
+                    {t.changePct.toFixed(2)}%
+                  </p>
+                )}
+              </div>
+              <div>
+                {hasPos ? (
+                  <>
+                    <p className="text-lg font-bold font-mono text-white leading-none">
+                      {t.weightPct.toFixed(1)}%
+                    </p>
+                    <p className="text-[10px] font-mono text-white/70 mt-1 truncate">
+                      {topHoldings.map((p) => p.symbol).join(" · ")}
+                      {t.positions.length > 2 &&
+                        ` +${t.positions.length - 2}`}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[10px] text-muted font-mono">— no exposure</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!hasData && (
+        <p className="text-xs text-muted text-center mt-4">
+          No holdings data yet
+        </p>
+      )}
     </Card>
   );
 }
 
-function MiniLineChart({ tone }: { tone: "accent" | "negative" }) {
-  // simple stepped path placeholder
-  const color = tone === "accent" ? "#22c55e" : "#ef4444";
-  const fill =
-    tone === "accent" ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)";
-  const points =
-    tone === "accent"
-      ? "0,60 15,50 30,55 45,40 60,45 75,30 90,35 105,20 120,25 135,10 150,15"
-      : "0,30 15,40 30,35 45,50 60,45 75,55 90,50 105,60 120,55 135,65 150,55";
+/* ── Diversification gauge (half-circle SVG) ── */
+function DiversificationGauge({
+  value,
+  color,
+}: {
+  value: number;
+  color: string;
+}) {
+  const r = 34;
+  const circ = Math.PI * r; // half circumference
+  const dash = (value / 100) * circ;
   return (
-    <div className="rounded-lg bg-surface-light border border-border p-2">
-      <svg viewBox="0 0 150 70" className="w-full h-20">
-        <polyline
-          points={points}
+    <div className="relative h-20 w-28">
+      <svg viewBox="0 0 100 60" className="h-full w-full">
+        <path
+          d={`M 10 55 A ${r} ${r} 0 0 1 90 55`}
+          fill="none"
+          stroke="rgba(255,255,255,0.08)"
+          strokeWidth="8"
+          strokeLinecap="round"
+        />
+        <path
+          d={`M 10 55 A ${r} ${r} 0 0 1 90 55`}
           fill="none"
           stroke={color}
-          strokeWidth="1.5"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ}`}
         />
-        <polygon points={`${points} 150,70 0,70`} fill={fill} />
       </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
+        <span className="text-lg font-bold font-mono" style={{ color }}>
+          {value}
+          <span className="text-xs text-muted">/100</span>
+        </span>
+      </div>
     </div>
   );
 }
 
-/* ── Attribution Factors table ── */
-function AttributionFactorsCard({
-  holdings,
-  performances,
-}: {
-  holdings: Holding[];
-  performances: Performance[];
-}) {
-  const perfMap = new Map(performances.map((p) => [p.symbol, p] as const));
+/* ── Sector classification ──
+   Maps tickers to one of the 11 GICS sectors. Unknown tickers fall
+   through to "Other". Index/sector ETFs are overridden explicitly. */
+const GICS_SECTORS = [
+  "Information Technology",
+  "Health Care",
+  "Financials",
+  "Consumer Discretionary",
+  "Communication Services",
+  "Industrials",
+  "Consumer Staples",
+  "Energy",
+  "Utilities",
+  "Real Estate",
+  "Materials",
+  "Diversified",
+  "Other",
+] as const;
 
-  // Aggregate across accounts
-  const qtyBySymbol = new Map<string, number>();
-  for (const h of holdings) {
-    qtyBySymbol.set(h.symbol, (qtyBySymbol.get(h.symbol) ?? 0) + h.quantity);
-  }
+const SECTOR_OVERRIDES: Record<string, (typeof GICS_SECTORS)[number]> = {
+  // ── US mega-caps / common single-names ──
+  AAPL: "Information Technology",
+  MSFT: "Information Technology",
+  NVDA: "Information Technology",
+  GOOGL: "Communication Services",
+  GOOG: "Communication Services",
+  META: "Communication Services",
+  NFLX: "Communication Services",
+  AMZN: "Consumer Discretionary",
+  TSLA: "Consumer Discretionary",
+  HD: "Consumer Discretionary",
+  SHOP: "Information Technology",
+  "SHOP.TO": "Information Technology",
+  PLTR: "Industrials",
+  "PLTR.TO": "Industrials",
+  AMD: "Information Technology",
+  INTC: "Information Technology",
+  CRM: "Information Technology",
+  ORCL: "Information Technology",
+  JPM: "Financials",
+  BAC: "Financials",
+  WFC: "Financials",
+  GS: "Financials",
+  V: "Financials",
+  MA: "Financials",
+  BRK: "Financials",
+  "BRK.B": "Financials",
+  JNJ: "Health Care",
+  UNH: "Health Care",
+  LLY: "Health Care",
+  PFE: "Health Care",
+  XOM: "Energy",
+  CVX: "Energy",
+  KO: "Consumer Staples",
+  PEP: "Consumer Staples",
+  WMT: "Consumer Staples",
+  PG: "Consumer Staples",
+  DIS: "Communication Services",
+  BA: "Industrials",
+  CAT: "Industrials",
+  GE: "Industrials",
+  T: "Communication Services",
+  VZ: "Communication Services",
 
-  type Row = {
-    t: string;
-    weight: number; // portfolio weight %
-    value: number; // market value $
-    chgPct: number; // daily %
-    impact: number; // daily $ contribution
-  };
+  // ── Broad-market ETFs → Diversified ──
+  VOO: "Diversified",
+  VTI: "Diversified",
+  SPY: "Diversified",
+  IVV: "Diversified",
+  QQQ: "Information Technology", // Nasdaq-100 is tech-heavy
+  "VFV.TO": "Diversified", // Vanguard S&P 500 (CAD)
+  "VSP.TO": "Diversified",
+  "XIC.TO": "Diversified",
+  "VUN.TO": "Diversified",
+  "XEQT.TO": "Diversified",
+  "VEQT.TO": "Diversified",
 
-  const raw: Row[] = [];
-  let total = 0;
-  for (const [symbol, qty] of qtyBySymbol) {
-    const perf = perfMap.get(symbol);
-    if (!perf) continue;
-    const value = qty * perf.current_price;
-    const impact = qty * perf.daily_change;
-    total += value;
-    raw.push({
-      t: symbol,
-      weight: 0,
-      value,
-      chgPct: perf.daily_change_pct,
-      impact,
-    });
-  }
-  for (const r of raw) r.weight = total ? (r.value / total) * 100 : 0;
-  raw.sort((a, b) => b.weight - a.weight);
+  // ── Sector ETFs → their dominant sector ──
+  "ZEB.TO": "Financials", // BMO Equal Weight Banks
+  "XFN.TO": "Financials",
+  "XIT.TO": "Information Technology",
+  "XHC.TO": "Health Care",
+  "XEG.TO": "Energy",
+  "ZUB.TO": "Financials",
 
-  const fmtMoney = (v: number) => {
-    const sign = v >= 0 ? "" : "-";
-    const abs = Math.abs(v);
-    if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
-    return `${sign}$${abs.toFixed(0)}`;
-  };
-  const fmtPct = (v: number) =>
-    `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-  return (
-    <Card>
-      <CardHeader
-        title="Attribution Factors (e.g., Value, Growth, Momentum)"
-        subtitle="Size corresponds to position weight. Color % daily % change."
-      />
-      <div className="grid grid-cols-5 text-[11px] text-muted pb-2 border-b border-border">
-        <span>Ticker</span>
-        <span className="text-right">Weight</span>
-        <span className="text-right">Value</span>
-        <span className="text-right">Change</span>
-        <span className="text-right">Impact</span>
-      </div>
-      {raw.length === 0 ? (
-        <p className="text-xs text-muted py-6 text-center">
-          No holdings data yet
-        </p>
-      ) : (
-        <div className="divide-y divide-border">
-          {raw.map((r, i) => {
-            const up = r.chgPct >= 0;
-            const color = up ? "text-accent" : "text-negative";
-            return (
-              <div
-                key={i}
-                className="grid grid-cols-5 py-2.5 text-xs font-mono items-center"
-              >
-                <span className="text-foreground">[{r.t}]</span>
-                <span className="text-right text-foreground">
-                  {r.weight.toFixed(1)}%
-                </span>
-                <span className="text-right text-muted">
-                  {fmtMoney(r.value)}
-                </span>
-                <span className={`text-right ${color}`}>
-                  {fmtPct(r.chgPct)}
-                </span>
-                <span className={`text-right ${color}`}>
-                  {fmtMoney(r.impact)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
+  // ── Crypto → Other ──
+  BTC: "Other",
+  ETH: "Other",
+  "BTC-USD": "Other",
+  "ETH-USD": "Other",
+};
+
+function sectorFor(symbol: string): (typeof GICS_SECTORS)[number] {
+  const override = SECTOR_OVERRIDES[symbol];
+  if (override) return override;
+  // Heuristic fallbacks for common ETF naming patterns
+  const s = symbol.toUpperCase();
+  if (s.endsWith(".TO") && /BANK|FIN|ZEB|XFN/.test(s)) return "Financials";
+  if (/USD|BTC|ETH|COIN/.test(s)) return "Other";
+  return "Other";
 }
+
