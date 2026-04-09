@@ -62,26 +62,6 @@ export default function OverviewPage() {
     () => getHoldings(user!.id)
   );
 
-  // AI Daily Summary state
-  const { data: summary, mutate: mutateSummary } = useSWR<string | null>(
-    user ? `summary-${user.id}` : null,
-    null,
-    { revalidateOnFocus: false, revalidateOnReconnect: false }
-  );
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-
-  const handleGenerateSummary = useCallback(async () => {
-    if (!user) return;
-    setSummaryLoading(true);
-    try {
-      const res = await getDailySummary(user.id);
-      mutateSummary(res.summary, { revalidate: false });
-    } finally {
-      setSummaryLoading(false);
-    }
-  }, [user, mutateSummary]);
-
   const handleRangeChange = useCallback((days: number) => setRange(days), []);
 
   const loading = !market && !marketError;
@@ -105,16 +85,17 @@ export default function OverviewPage() {
   return (
     <div className="space-y-5">
       {/* Page header — tabs */}
-      <OverviewTabs />
+     
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
-        {/* ───────── Left column ───────── */}
+        {/* ───────── Left column: Portfolio Performance + Waterfall ───────── */}
         <div className="flex flex-col gap-5">
-          <DailyNarrativeCard
-            market={market}
+          <PortfolioPerformanceCard
             history={historyData?.history ?? []}
-            onLearnMore={() => setExpanded(true)}
+            benchmark={benchmarkData?.history ?? []}
+            range={range}
+            onRangeChange={handleRangeChange}
           />
           <div className="flex-1 min-h-0">
             <WaterfallContributionCard
@@ -125,32 +106,15 @@ export default function OverviewPage() {
           </div>
         </div>
 
-        {/* ───────── Right column ───────── */}
-        <div className="space-y-5">
-          <PortfolioPerformanceCard
+        {/* ───────── Right column: Daily Narrative (AI summary) ───────── */}
+        <div className="flex flex-col gap-5">
+          <DailyNarrativeCard
+            userId={user?.id ?? null}
+            market={market}
             history={historyData?.history ?? []}
-            benchmark={benchmarkData?.history ?? []}
-            range={range}
-            onRangeChange={handleRangeChange}
           />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <NewsFeedCard />
-            <TopMoversCard />
-          </div>
-
         </div>
       </div>
-
-      {/* Expanded AI summary modal */}
-      {expanded && (
-        <DailyNarrativeModal
-          summary={summary ?? null}
-          loading={summaryLoading}
-          onClose={() => setExpanded(false)}
-          onRegenerate={handleGenerateSummary}
-        />
-      )}
     </div>
   );
 }
@@ -199,14 +163,40 @@ function Card({
 }
 
 function DailyNarrativeCard({
+  userId,
   market,
   history,
-  onLearnMore,
 }: {
+  userId: string | null;
   market: MarketData | undefined;
   history: HistoryPoint[];
-  onLearnMore: () => void;
 }) {
+  // ── AI summary state: auto-generate on mount / when user changes ──
+  const { data: summary, mutate: mutateSummary } = useSWR<string | null>(
+    userId ? `summary-${userId}` : null,
+    null,
+    { revalidateOnFocus: false, revalidateOnReconnect: false }
+  );
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  const generate = useCallback(async () => {
+    if (!userId) return;
+    setSummaryLoading(true);
+    try {
+      const res = await getDailySummary(userId);
+      mutateSummary(res.summary, { revalidate: false });
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [userId, mutateSummary]);
+
+  useEffect(() => {
+    if (userId && !summary && !summaryLoading) {
+      generate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   // ── Today's portfolio % change (from latest history point) ──
   const todayPct =
     history.length > 0 ? history[history.length - 1].change_pct : null;
@@ -265,10 +255,19 @@ function DailyNarrativeCard({
   }
 
   return (
-    <Card className="border-accent/30">
-      <p className="text-[11px] font-semibold tracking-widest uppercase text-muted mb-3">
-        Daily Narrative
-      </p>
+    <Card className="border-accent/30 h-full flex flex-col">
+      <div className="flex items-start justify-between mb-3">
+        <p className="text-[11px] font-semibold tracking-widest uppercase text-muted">
+          Daily Narrative
+        </p>
+        <button
+          onClick={generate}
+          disabled={summaryLoading}
+          className="text-[10px] text-muted hover:text-foreground disabled:opacity-50"
+        >
+          {summaryLoading ? "Generating..." : "Regenerate"}
+        </button>
+      </div>
       <p className="text-sm text-foreground/80 mb-2">
         Your portfolio {moveVerb}{" "}
         <span className={up ? "text-accent" : "text-negative"}>
@@ -277,15 +276,66 @@ function DailyNarrativeCard({
         Today
       </p>
       <h2 className="text-2xl font-bold leading-tight mb-3">{headline}</h2>
-      <p className="text-sm text-muted leading-relaxed mb-4 line-clamp-3">
-        {teaser}
-      </p>
-      <button
-        onClick={onLearnMore}
-        className="text-xs text-accent hover:underline"
-      >
-        Learn More ›
-      </button>
+      <p className="text-sm text-muted leading-relaxed mb-5">{teaser}</p>
+
+      <div className="border-t border-border pt-4 flex-1 min-h-0">
+        <p className="text-[10px] font-semibold tracking-widest uppercase text-muted mb-3">
+          AI Daily Summary · Powered by Claude
+        </p>
+        {summaryLoading && !summary ? (
+          <div className="flex items-center gap-3 text-muted py-6">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-accent" />
+            <span className="text-sm">Analyzing your portfolio...</span>
+          </div>
+        ) : summary ? (
+          <div className="text-sm leading-relaxed text-foreground/90">
+            <ReactMarkdown
+              components={{
+                h1: ({ children }) => (
+                  <h1 className="text-lg font-bold mb-3 text-foreground">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="text-base font-bold mb-2 mt-4 text-foreground">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-sm font-semibold mb-1.5 mt-3 text-foreground">
+                    {children}
+                  </h3>
+                ),
+                p: ({ children }) => (
+                  <p className="mb-3 last:mb-0">{children}</p>
+                ),
+                strong: ({ children }) => (
+                  <strong className="font-semibold text-accent">
+                    {children}
+                  </strong>
+                ),
+                ul: ({ children }) => (
+                  <ul className="list-disc list-inside mb-3 space-y-1">
+                    {children}
+                  </ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="list-decimal list-inside mb-3 space-y-1">
+                    {children}
+                  </ol>
+                ),
+                li: ({ children }) => (
+                  <li className="text-foreground/90">{children}</li>
+                ),
+              }}
+            >
+              {summary}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <p className="text-sm text-muted py-6">No summary yet.</p>
+        )}
+      </div>
     </Card>
   );
 }
@@ -318,134 +368,6 @@ function extractNarrative(summary: string | null): {
   return { headline, teaser: teaserLine };
 }
 
-function DailyNarrativeModal({
-  summary,
-  loading,
-  onClose,
-  onRegenerate,
-}: {
-  summary: string | null;
-  loading: boolean;
-  onClose: () => void;
-  onRegenerate: () => void;
-}) {
-  // close on ESC
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  // Auto-generate on first open if there's no summary yet
-  useEffect(() => {
-    if (!summary && !loading) {
-      onRegenerate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/70 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl border border-accent/40 bg-surface p-8 shadow-2xl shadow-accent/10"
-      >
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <p className="text-[11px] font-semibold tracking-widest uppercase text-accent">
-              Daily Narrative
-            </p>
-            <p className="text-xs text-muted mt-1">Powered by Claude</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-muted hover:text-foreground text-xl leading-none"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-
-        {loading ? (
-          <div className="flex items-center gap-3 text-muted py-12 justify-center">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-accent" />
-            <span className="text-sm">Analyzing your portfolio...</span>
-          </div>
-        ) : summary ? (
-          <div className="text-sm leading-relaxed text-foreground/90">
-            <ReactMarkdown
-              components={{
-                h1: ({ children }) => (
-                  <h1 className="text-2xl font-bold mb-4 text-foreground">
-                    {children}
-                  </h1>
-                ),
-                h2: ({ children }) => (
-                  <h2 className="text-lg font-bold mb-3 mt-5 text-foreground">
-                    {children}
-                  </h2>
-                ),
-                h3: ({ children }) => (
-                  <h3 className="text-base font-semibold mb-2 mt-4 text-foreground">
-                    {children}
-                  </h3>
-                ),
-                p: ({ children }) => (
-                  <p className="mb-3 last:mb-0">{children}</p>
-                ),
-                strong: ({ children }) => (
-                  <strong className="font-semibold text-accent">
-                    {children}
-                  </strong>
-                ),
-                ul: ({ children }) => (
-                  <ul className="list-disc list-inside mb-3 space-y-1">
-                    {children}
-                  </ul>
-                ),
-                ol: ({ children }) => (
-                  <ol className="list-decimal list-inside mb-3 space-y-1">
-                    {children}
-                  </ol>
-                ),
-                li: ({ children }) => (
-                  <li className="text-foreground/90">{children}</li>
-                ),
-              }}
-            >
-              {summary}
-            </ReactMarkdown>
-          </div>
-        ) : (
-          <p className="text-sm text-muted py-8 text-center">
-            No summary yet.
-          </p>
-        )}
-
-        <div className="mt-6 pt-5 border-t border-border flex items-center justify-end gap-3">
-          <button
-            onClick={onRegenerate}
-            disabled={loading}
-            className="rounded-full border border-border px-4 py-2 text-xs font-semibold text-muted hover:text-foreground hover:border-accent/40 disabled:opacity-50 transition-colors"
-          >
-            Regenerate
-          </button>
-          <button
-            onClick={onClose}
-            className="rounded-full bg-accent px-5 py-2 text-xs font-semibold text-black hover:bg-accent/90 transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function WaterfallContributionCard({
   holdings,
