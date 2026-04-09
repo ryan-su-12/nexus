@@ -157,46 +157,59 @@ function HeatmapTreemapCard({
     });
   }
 
-  // Group into sector buckets
+  // Group into sector buckets. Positions are split across sectors
+  // via sectorWeightsFor() — broad-market ETFs like VFV distribute
+  // across the S&P 500 sector weights instead of falling into a
+  // single "Diversified" bucket.
   type Bucket = {
-    name: string; // sector name
-    size: number; // total market value
-    weightPct: number;
-    weightedChangePct: number; // value-weighted daily %
-    positions: Position[];
+    name: string;
+    size: number; // portion of market value attributed to this sector
+    weightedChangeNumer: number; // Σ (allocatedValue × changePct)
+    positions: Position[]; // positions contributing to this sector
   };
+
+  const CORE_SECTOR_SET = new Set<string>(
+    GICS_SECTORS.filter((s) => s !== "Other" && s !== "Diversified")
+  );
 
   const bucketMap = new Map<string, Bucket>();
   for (const p of positions) {
-    const b = bucketMap.get(p.sector) ?? {
-      name: p.sector,
-      size: 0,
-      weightPct: 0,
-      weightedChangePct: 0,
-      positions: [],
-    };
-    b.size += p.value;
-    b.weightedChangePct += p.value * p.changePct; // accumulate numerator
-    b.positions.push(p);
-    bucketMap.set(p.sector, b);
+    const weights = sectorWeightsFor(p.symbol);
+    for (const [rawSector, w] of Object.entries(weights) as [string, number][]) {
+      // Anything that isn't a core GICS sector falls into "Other"
+      // so portfolio weight always sums to 100% on the heatmap.
+      const sector = CORE_SECTOR_SET.has(rawSector) ? rawSector : "Other";
+      const allocated = p.value * w;
+      const b = bucketMap.get(sector) ?? {
+        name: sector,
+        size: 0,
+        weightedChangeNumer: 0,
+        positions: [],
+      };
+      b.size += allocated;
+      b.weightedChangeNumer += allocated * p.changePct;
+      // Only list a position under its primary sector to avoid
+      // repeating VFV under all 11 tiles.
+      if (!b.positions.find((x) => x.symbol === p.symbol) && w >= 0.5) {
+        b.positions.push(p);
+      }
+      bucketMap.set(sector, b);
+    }
   }
 
-  const buckets = Array.from(bucketMap.values()).map((b) => ({
-    ...b,
-    weightPct: total ? (b.size / total) * 100 : 0,
-    weightedChangePct: b.size ? b.weightedChangePct / b.size : 0,
-    positions: b.positions.sort((a, b) => b.value - a.value),
-  }));
-  buckets.sort((a, b) => b.size - a.size);
+  // Normalize: weightPct = share of total, changePct = value-weighted avg
+  for (const b of bucketMap.values()) {
+    b.positions.sort((a, b) => b.value - a.value);
+  }
 
-  const hasData = buckets.length > 0;
+  const hasData = bucketMap.size > 0 && total > 0;
 
   // Diversification index: Herfindahl-based. Score = 100 means
   // perfectly even distribution across the 11 sectors; score → 0
   // as the portfolio concentrates in one sector.
   const N = 11;
-  const hhi = buckets.reduce(
-    (s, b) => s + Math.pow(b.weightPct / 100, 2),
+  const hhi = Array.from(bucketMap.values()).reduce(
+    (s, b) => s + Math.pow(total ? b.size / total : 0, 2),
     0
   );
   const minHHI = 1 / N;
@@ -238,13 +251,14 @@ function HeatmapTreemapCard({
   const CORE_SECTORS = GICS_SECTORS.filter(
     (s) => s !== "Other" && s !== "Diversified"
   );
-  const tiles: SectorTile[] = CORE_SECTORS.map((name) => {
+  const extras = (["Other"] as const).filter((s) => bucketMap.has(s));
+  const tiles: SectorTile[] = [...CORE_SECTORS, ...extras].map((name) => {
     const b = bucketMap.get(name);
     return {
       name,
       weightPct: b && total ? (b.size / total) * 100 : 0,
-      changePct: b && b.size ? b.weightedChangePct : 0,
-      positions: b ? b.positions.sort((x, y) => y.value - x.value) : [],
+      changePct: b && b.size ? b.weightedChangeNumer / b.size : 0,
+      positions: b ? b.positions : [],
     };
   });
 
@@ -274,7 +288,7 @@ function HeatmapTreemapCard({
 
       <div className="grid grid-cols-4 gap-2 auto-rows-[120px]">
         {tiles.map((t) => {
-          const hasPos = t.positions.length > 0;
+          const hasPos = t.weightPct > 0;
           const fill = hasPos ? colorFor(t.changePct) : "rgba(82,82,82,0.18)";
           const border = hasPos
             ? "border-transparent"
@@ -397,6 +411,9 @@ const SECTOR_OVERRIDES: Record<string, (typeof GICS_SECTORS)[number]> = {
   AAPL: "Information Technology",
   MSFT: "Information Technology",
   NVDA: "Information Technology",
+  "NVDA.TO": "Information Technology",
+  "NVDA.NE": "Information Technology",
+  "NVDA.NEO": "Information Technology",
   GOOGL: "Communication Services",
   GOOG: "Communication Services",
   META: "Communication Services",
@@ -466,12 +483,56 @@ const SECTOR_OVERRIDES: Record<string, (typeof GICS_SECTORS)[number]> = {
 };
 
 function sectorFor(symbol: string): (typeof GICS_SECTORS)[number] {
-  const override = SECTOR_OVERRIDES[symbol];
+  const s = symbol.trim().toUpperCase();
+  const override = SECTOR_OVERRIDES[s];
   if (override) return override;
-  // Heuristic fallbacks for common ETF naming patterns
-  const s = symbol.toUpperCase();
   if (s.endsWith(".TO") && /BANK|FIN|ZEB|XFN/.test(s)) return "Financials";
   if (/USD|BTC|ETH|COIN/.test(s)) return "Other";
   return "Other";
+}
+
+/* Approximate S&P 500 sector weights (late 2024) used to decompose
+   broad-market index ETFs across their underlying sectors. */
+const SP500_SECTOR_WEIGHTS: Record<string, number> = (() => {
+  const raw: Record<string, number> = {
+    "Information Technology": 0.30,
+    "Financials": 0.13,
+    "Health Care": 0.11,
+    "Consumer Discretionary": 0.10,
+    "Communication Services": 0.09,
+    "Industrials": 0.08,
+    "Consumer Staples": 0.06,
+    "Energy": 0.035,
+    "Utilities": 0.025,
+    "Real Estate": 0.022,
+    "Materials": 0.018,
+  };
+  const sum = Object.values(raw).reduce((a, b) => a + b, 0);
+  const norm: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) norm[k] = v / sum;
+  return norm;
+})();
+
+// Broad-market ETF ticker *roots* — matched after stripping any
+// exchange suffix (.TO, .NE, .NEO, .V, etc.) and uppercasing.
+const BROAD_MARKET_ROOTS = new Set([
+  "VOO", "VTI", "SPY", "IVV",
+  "VFV", "VSP", "VUN", "XIC", "XEQT", "VEQT", "VGRO", "VBAL",
+  "XAW", "XUU", "VUS", "ZSP", "ZEA",
+]);
+
+/* Returns a {sector: weight} map that sums to 1.0. Single-sector
+   holdings return {sector: 1}; broad-market ETFs return the S&P 500
+   sector decomposition so e.g. VFV spreads across all 11 sectors. */
+function sectorWeightsFor(symbol: string): Record<string, number> {
+  const s = symbol.trim().toUpperCase();
+  const root = s.split(".")[0];
+  if (BROAD_MARKET_ROOTS.has(root)) return { ...SP500_SECTOR_WEIGHTS };
+  const sector = sectorFor(s);
+  // Any holding that resolves to "Diversified" (broad-market ETF
+  // override) also gets split across S&P 500 sector weights so it
+  // doesn't disappear from the heatmap.
+  if (sector === "Diversified") return { ...SP500_SECTOR_WEIGHTS };
+  return { [sector]: 1 };
 }
 
