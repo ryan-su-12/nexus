@@ -9,7 +9,7 @@ AI-powered portfolio intelligence platform that connects to your brokerage accou
 - **Sector Heatmap** — Visualize sector exposure with a treemap colored by daily performance
 - **Waterfall Chart** — See per-holding contribution to today's portfolio movement
 - **AI Daily Summary** — Auto-generated narrative explaining what moved your portfolio and why (powered by Claude)
-- **AI Chat** — Ask Axon anything about your portfolio, risk, or market trends
+- **AI Chat** — Ask Nexus anything about your portfolio, risk, or market trends
 - **MFA Support** — TOTP-based two-factor authentication via Supabase Auth
 
 ## Tech Stack
