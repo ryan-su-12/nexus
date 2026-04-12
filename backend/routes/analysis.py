@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 import anthropic
 import json
 from config import settings
@@ -7,7 +8,7 @@ from routes.market import get_market_data
 
 router = APIRouter()
 
-SYSTEM_PROMPT = """You are Axon, a portfolio intelligence assistant. You provide clear,
+SUMMARY_PROMPT = """You are Axon, a portfolio intelligence assistant. You provide clear,
 concise daily summaries of a user's investment portfolio performance.
 
 Your job is to:
@@ -24,6 +25,20 @@ Rules:
 - Keep the total summary under 300 words
 - Use dollar amounts and percentages
 - Don't give investment advice or recommendations"""
+
+CHAT_PROMPT = """You are Axon, a portfolio intelligence chatbot. You help users understand
+their investment portfolio by answering questions about their holdings, performance,
+risk, sector exposure, and market trends.
+
+You have access to the user's current portfolio data which is provided as context.
+Use this data to give specific, personalized answers.
+
+Rules:
+- Be conversational but precise — use actual numbers from their portfolio
+- If asked about something not in the data, say so honestly
+- Don't give specific investment advice or buy/sell recommendations
+- Keep responses concise and focused
+- Use dollar amounts and percentages when relevant"""
 
 @router.get("/users/{user_id}/summary")
 async def daily_summary(user_id: str):
@@ -42,7 +57,7 @@ async def daily_summary(user_id: str):
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=SUMMARY_PROMPT,
             messages=[{
                 "role": "user",
                 "content": f"Here is my portfolio and today's market data. Give me my daily summary.\n\n{context}"
@@ -51,6 +66,35 @@ async def daily_summary(user_id: str):
 
         summary = response.content[0].text
         return {"date": __import__("datetime").datetime.now().strftime("%Y-%m-%d"), "summary": summary}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+@router.post("/users/{user_id}/chat")
+async def chat(user_id: str, body: ChatRequest):
+    try:
+        market = await get_market_data(user_id)
+        context = json.dumps(market, indent=2)
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system=f"{CHAT_PROMPT}\n\nHere is the user's current portfolio data:\n{context}",
+            messages=[{
+                "role": "user",
+                "content": body.message,
+            }],
+        )
+
+        return {"reply": response.content[0].text}
 
     except HTTPException:
         raise
