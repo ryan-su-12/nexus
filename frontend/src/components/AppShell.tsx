@@ -1,15 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 
 const navItems = [
   { href: "/", label: "Overview", icon: "◎" },
-  { href: "/holdings", label: "Portfolio", icon: "◫" },
-  { href: "/analytics", label: "Analytics", icon: "◈" },
-  { href: "/news", label: "News", icon: "◧" },
+  { href: "/analytics", label: "Chat", icon: "◈" },
   { href: "/connect", label: "Connect", icon: "⟡" },
 ];
 
@@ -73,12 +72,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Header */}
         <div className={`py-5 ${collapsed ? "px-3" : "px-5"}`}>
           {collapsed ? (
-            <h1 className="text-xl font-bold text-accent text-center">N</h1>
+            <div className="flex justify-center">
+              <Image src="/logo.png" alt="Nexus" width={28} height={28} />
+            </div>
           ) : (
             <>
-              <h1 className="text-xl font-bold tracking-tight text-accent">
-                Nexus
-              </h1>
+              <div className="flex items-center gap-2">
+                <Image src="/logo.png" alt="Nexus" width={32} height={32} />
+                <h1 className="text-xl font-bold tracking-tight text-accent">
+                  Nexus
+                </h1>
+              </div>
               <p className="text-xs text-muted mt-1 truncate">{user.email}</p>
             </>
           )}

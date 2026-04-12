@@ -25,6 +25,7 @@ import {
   type Holding,
 } from "@/lib/api";
 import PortfolioChart from "@/components/PortfolioChart";
+import HeatmapTreemapCard from "@/components/HeatmapTreemapCard";
 
 /* ──────────────────────────────────────────────────────────────
    Overview page — new layout
@@ -89,7 +90,7 @@ export default function OverviewPage() {
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
-        {/* ───────── Left column: Portfolio Performance + Waterfall ───────── */}
+        {/* ───────── Left column: Portfolio Performance + Carousel ───────── */}
         <div className="flex flex-col gap-5">
           <PortfolioPerformanceCard
             history={historyData?.history ?? []}
@@ -98,7 +99,7 @@ export default function OverviewPage() {
             onRangeChange={handleRangeChange}
           />
           <div className="flex-1 min-h-0">
-            <WaterfallContributionCard
+            <InsightCarousel
               holdings={holdingsData?.holdings ?? []}
               market={market}
               history={historyData?.history ?? []}
@@ -107,7 +108,7 @@ export default function OverviewPage() {
         </div>
 
         {/* ───────── Right column: Daily Narrative (AI summary) ───────── */}
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-5 min-h-0 overflow-hidden">
           <DailyNarrativeCard
             userId={user?.id ?? null}
             market={market}
@@ -255,7 +256,7 @@ function DailyNarrativeCard({
   }
 
   return (
-    <Card className="border-accent/30 h-full flex flex-col">
+    <Card className="border-accent/30 h-full flex flex-col min-h-0 overflow-hidden">
       <div className="flex items-start justify-between mb-3">
         <p className="text-[11px] font-semibold tracking-widest uppercase text-muted">
           Daily Narrative
@@ -278,7 +279,7 @@ function DailyNarrativeCard({
       <h2 className="text-2xl font-bold leading-tight mb-3">{headline}</h2>
       <p className="text-sm text-muted leading-relaxed mb-5">{teaser}</p>
 
-      <div className="border-t border-border pt-4 flex-1 min-h-0">
+      <div className="border-t border-border pt-4 flex-1 min-h-0 overflow-y-auto">
         <p className="text-[10px] font-semibold tracking-widest uppercase text-muted mb-3">
           AI Daily Summary · Powered by Claude
         </p>
@@ -368,6 +369,72 @@ function extractNarrative(summary: string | null): {
   return { headline, teaser: teaserLine };
 }
 
+
+function InsightCarousel({
+  holdings,
+  market,
+  history,
+}: {
+  holdings: Holding[];
+  market: MarketData | undefined;
+  history: HistoryPoint[];
+}) {
+  const [page, setPage] = useState(0);
+  const labels = ["Waterfall", "Heatmap"];
+  const total = labels.length;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Carousel header with dots + arrows */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          {labels.map((label, i) => (
+            <button
+              key={label}
+              onClick={() => setPage(i)}
+              className={`text-[11px] font-semibold tracking-wider uppercase transition-colors ${
+                page === i ? "text-accent" : "text-muted hover:text-foreground"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPage((p) => (p - 1 + total) % total)}
+            className="h-6 w-6 rounded-full border border-border flex items-center justify-center text-muted hover:text-foreground hover:border-accent/40 transition-colors text-xs"
+          >
+            ‹
+          </button>
+          <button
+            onClick={() => setPage((p) => (p + 1) % total)}
+            className="h-6 w-6 rounded-full border border-border flex items-center justify-center text-muted hover:text-foreground hover:border-accent/40 transition-colors text-xs"
+          >
+            ›
+          </button>
+        </div>
+      </div>
+
+      {/* Pages */}
+      <div className="flex-1 min-h-0">
+        {page === 0 && (
+          <WaterfallContributionCard
+            holdings={holdings}
+            market={market}
+            history={history}
+          />
+        )}
+        {page === 1 && (
+          <HeatmapTreemapCard
+            holdings={holdings}
+            performances={market?.performances ?? []}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
 function WaterfallContributionCard({
   holdings,
